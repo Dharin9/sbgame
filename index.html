@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shadowbox</title>
+<style>
+:root{--bg:#f6f5f1;--fg:#1b1b1f;--mute:#77777f;--card:#fff;--line:#d8d6cf;--acc:#2a3b8f;--heart:#e24b4a;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17171b;--fg:#ececf1;--mute:#9a9aa5;--card:#222228;--line:#3a3a42;--acc:#8fa2ff;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#17171b;--fg:#ececf1;--mute:#9a9aa5;--card:#222228;--line:#3a3a42;--acc:#8fa2ff;color-scheme:dark}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;touch-action:none;user-select:none;overflow:hidden}
+.screen{display:none;height:100%;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px;text-align:center}
+.screen.on{display:flex}
+h1{font-size:clamp(32px,6vw,52px);letter-spacing:.08em;margin:0;font-weight:800}
+button{font:inherit;font-weight:600;padding:12px 28px;border-radius:10px;border:2px solid var(--fg);background:var(--card);color:var(--fg);cursor:pointer;min-width:200px}
+button:active{transform:scale(.97)}
+input{font:inherit;font-size:28px;letter-spacing:.3em;text-transform:uppercase;text-align:center;width:9ch;padding:10px;border-radius:10px;border:2px solid var(--line);background:var(--card);color:var(--fg)}
+.code{font-size:56px;font-weight:800;letter-spacing:.25em;color:var(--acc)}
+.mute{color:var(--mute);font-size:15px;max-width:34ch}
+#game{padding:0;justify-content:flex-start;gap:0}
+#hud{display:flex;width:100%;max-width:900px;justify-content:space-between;align-items:center;padding:10px 16px;box-sizing:border-box;font-size:15px}
+#timer{font-size:34px;font-weight:800;min-width:2ch}
+#stage{flex:1;width:100%;max-width:900px;min-height:0}
+#info{padding:10px 16px 16px;min-height:48px;font-size:17px;font-weight:600}
+svg{width:100%;height:100%}
+svg *{stroke:var(--fg)}
+.f{transition:transform .9s}
+.heart{fill:var(--heart);stroke:none;font-size:20px;transition:opacity .4s}
+.lab{fill:var(--mute);stroke:none;font-size:14px;text-anchor:middle}
+#over{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;color:#fff;font-size:34px;font-weight:800}
+#over.on{display:flex}
+</style>
+</head>
+<body>
+<div id="menu" class="screen on">
+  <h1>SHADOWBOX</h1>
+  <p class="mute">Boxer vs dodger. Match the dodger's direction three times in a row to knock them out.</p>
+  <button id="bCreate">Create room</button>
+  <button id="bJoin">Join room</button>
+  <p id="err" class="mute"></p>
+</div>
+<div id="create" class="screen">
+  <div class="mute">Share this code with your opponent</div>
+  <div class="code" id="codeOut"></div>
+  <div class="mute" id="waitMsg">Waiting for opponent…</div>
+</div>
+<div id="join" class="screen">
+  <div class="mute">Enter the 5-letter room code</div>
+  <input id="codeIn" maxlength="5" autocomplete="off" autocapitalize="characters" spellcheck="false">
+  <button id="bGo">Join</button>
+  <div class="mute" id="joinMsg"></div>
+</div>
+<div id="game" class="screen" style="position:relative">
+  <div id="hud"><span id="role"></span><span id="timer"></span><span id="streak"></span></div>
+  <div id="stage"><svg id="svg" preserveAspectRatio="xMidYMid meet"></svg></div>
+  <div id="info"></div>
+  <div id="over"><div id="overTxt"></div><button id="bAgain">Rematch</button></div>
+</div>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var NS='http://www.w3.org/2000/svg';
+var VEC={L:[-1,0],R:[1,0],U:[0,-1],D:[0,1]};
+var ARW={L:'◀',R:'▶',U:'▲',D:'▼'};
+var KEYS={ArrowLeft:'L',ArrowRight:'R',ArrowUp:'U',ArrowDown:'D'};
+var room=null,isHost=false,me='S',peerId=null,started=false;
+var S={};
+
+function show(id){['menu','create','join','game'].forEach(function(s){$(s).classList.toggle('on',s===id)})}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+function setErr(t){$('err').textContent=t}
+
+/* ---------- stage ---------- */
+var svg=$('svg'),figs={},heartsG={};
+function mk(tag,attrs,parent){var e=document.createElementNS(NS,tag);for(var k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e}
+function build(){
+  svg.innerHTML='';
+  ['A','B'].forEach(function(w){
+    var g=mk('g',{'class':'f'},svg);
+    mk('line',{x1:0,y1:0,x2:-18,y2:60,'stroke-width':4,'stroke-linecap':'round'},g);
+    mk('line',{x1:0,y1:0,x2:18,y2:60,'stroke-width':4,'stroke-linecap':'round'},g);
+    mk('line',{x1:0,y1:0,x2:0,y2:-60,'stroke-width':4,'stroke-linecap':'round'},g);
+    var neck=mk('line',{x1:0,y1:-60,x2:0,y2:-78,'stroke-width':4},g);
+    var head=mk('circle',{cx:0,cy:-78,r:18,fill:'none','stroke-width':4},g);
+    var arms=mk('path',{d:'','stroke-width':4,fill:'none','stroke-linecap':'round'},g);
+    var fist=mk('circle',{r:7,cx:0,cy:0,fill:'var(--fg)',visibility:'hidden'},g);
+    var lab=mk('text',{'class':'lab',x:0,y:92},g);
+    var hg=mk('g',{},svg);
+    for(var i=0;i<15;i++){var t=mk('text',{'class':'heart',x:(i%5)*24,y:Math.floor(i/5)*24+18},hg);t.textContent='♥'}
+    figs[w]={g:g,head:head,neck:neck,arms:arms,fist:fist,lab:lab,pos:[0,0]};heartsG[w]=hg;
+  });
+  layout();
+}
+function layout(){
+  var portrait=window.innerHeight>window.innerWidth;
+  var W=portrait?480:800,H=portrait?760:480;
+  svg.setAttribute('viewBox','0 0 '+W+' '+H);
+  var P=portrait?{A:[140,590,[40,670]],B:[340,300,[250,100]]}:{A:[230,320,[110,395]],B:[570,230,[500,30]]};
+  ['A','B'].forEach(function(w){
+    figs[w].pos=[P[w][0],P[w][1]];
+    figs[w].g.style.transform='translate('+P[w][0]+'px,'+P[w][1]+'px)';
+    heartsG[w].style.transform='translate('+P[w][2][0]+'px,'+P[w][2][1]+'px)';
+  });
+}
+window.addEventListener('resize',layout);
+function pose(w,role,dir){
+  var f=figs[w],o=[0,0],v=dir&&VEC[dir];
+  if(role==='D'&&v)o=[v[0]*22,v[1]*(v[1]>0?10:14)];
+  f.head.setAttribute('cx',o[0]);f.head.setAttribute('cy',-78+o[1]);
+  f.neck.setAttribute('x2',o[0]);f.neck.setAttribute('y2',-78+o[1]+18*(o[0]||o[1]?0.4:1)*0+0);
+  if(role==='B'&&v){
+    var ex=v[0]*55,ey=-48+v[1]*55,gx=dir==='L'?14:-14;
+    f.arms.setAttribute('d','M0,-48 L'+ex+','+ey+' M0,-48 L'+gx+',-30');
+    f.fist.setAttribute('cx',ex);f.fist.setAttribute('cy',ey);f.fist.setAttribute('visibility','visible');
+  }else{
+    f.arms.setAttribute('d',role==='B'?'M0,-48 L-14,-30 M0,-48 L14,-30':'M0,-48 L-20,-14 M0,-48 L20,-14');
+    f.fist.setAttribute('visibility','hidden');
+  }
+}
+function drawHearts(){
+  ['A','B'].forEach(function(w){
+    var ts=heartsG[w].children;
+    for(var i=0;i<15;i++)ts[i].style.opacity=i<S.hearts[w]?1:.12;
+  });
+}
+function roles(){return {A:S.boxer==='A'?'B':'D',B:S.boxer==='B'?'B':'D'}}
+function labels(){
+  var r=roles();
+  ['A','B'].forEach(function(w){figs[w].lab.textContent=(w===me?'YOU':'OPPONENT')+' · '+(r[w]==='B'?'BOXER':'DODGER')});
+  if(me!=='S')$('role').textContent=r[me]==='B'?'You box':'You dodge';else $('role').textContent='Spectating';
+  $('streak').textContent=S.streak?'Streak '+S.streak+'/3':'';
+}
+
+/* ---------- game flow ---------- */
+function reset(){
+  S={hearts:{A:15,B:15},boxer:'A',streak:0,hist:[],n:0,picks:{},my:null,phase:'wait',busy:false,pending:0,over:false};
+  build();var r=roles();pose('A',r.A);pose('B',r.B);drawHearts();labels();$('over').classList.remove('on');$('info').textContent='Get ready…';$('timer').textContent='';
+}
+function startRound(n){
+  S.n=n;S.picks={};S.my=null;S.phase='pick';S.busy=false;
+  var r=roles();pose('A',r.A);pose('B',r.B);labels();
+  $('info').textContent=me==='S'?'Players are choosing…':'Pick a direction: arrow keys or swipe';
+  var t0=performance.now(),myN=n;
+  var iv=setInterval(function(){
+    if(S.n!==myN||S.phase!=='pick'){clearInterval(iv);return}
+    var left=5-(performance.now()-t0)/1000;
+    if(left<=0){clearInterval(iv);$('timer').textContent='0';resolve(myN)}
+    else $('timer').textContent=Math.ceil(left);
+  },100);
+}
+function choose(d){
+  if(S.phase!=='pick'||me==='S')return;
+  S.my=d;S.picks[me]=d;
+  room.emit('pick',{n:S.n,w:me,d:d});
+  $('info').textContent='Locked: '+ARW[d]+' (you can change it)';
+}
+async function resolve(n){
+  S.phase='reveal';S.busy=true;
+  await sleep(600);
+  var r=roles(),bw=S.boxer,dw=bw==='A'?'B':'A';
+  var bp=S.picks[bw],dp=S.picks[dw],match=!!bp&&bp===dp;
+  var seq=[],dmg=0;
+  if(match){S.streak++;S.hist.push(bp);seq=S.hist.slice();dmg=S.streak===1?1:S.streak===2?2:15}
+  $('streak').textContent=match?'Streak '+S.streak+'/3':'';
+  if(match){
+    for(var i=0;i<seq.length;i++){
+      var last=i===seq.length-1;
+      $('info').textContent=last?(S.streak>1?'Combo '+S.streak+'! ':'')+'Match '+ARW[seq[i]]:'Replay '+ARW[seq[i]];
+      pose(bw,'B',seq[i]);pose(dw,'D',seq[i]);await sleep(650);
+      if(!last){pose('A',r.A);pose('B',r.B);await sleep(250)}
+    }
+    S.hearts[dw]=Math.max(0,S.hearts[dw]-dmg);drawHearts();
+    $('info').textContent=S.hearts[dw]===0?'KNOCKOUT!':'Hit! Dodger loses '+dmg+' heart'+(dmg>1?'s':'');
+    await sleep(700);
+    if(S.hearts[dw]===0){
+      var f=figs[dw];f.g.style.transform='translate('+f.pos[0]+'px,'+(f.pos[1]+40)+'px) rotate('+(dw==='A'?-90:90)+'deg)';
+      await sleep(1200);S.over=true;
+      var won=dw!==me&&me!=='S';
+      $('overTxt').textContent=me==='S'?'Player '+(bw==='A'?1:2)+' wins':(won?'You win!':'You lose');
+      $('over').classList.add('on');
+    }else if(S.streak===3){/* unreachable: 3rd match always ends the game */}
+  }else{
+    pose(bw,'B',bp);pose(dw,'D',dp);
+    $('info').textContent=(!bp||!dp)?'No pick — roles switch':'Miss! Roles switch';
+    await sleep(1100);
+    S.boxer=dw;S.streak=0;S.hist=[];
+  }
+  S.busy=false;
+  if(S.over)return;
+  if(isHost){await sleep(400);room.emit('round',{n:n+1})}
+  if(S.pending){var p=S.pending;S.pending=0;startRound(p)}
+}
+function onRound(m){
+  var n=m.data&&m.data.n;if(!n||S.over)return;
+  if(S.busy)S.pending=n;else startRound(n);
+}
+
+/* ---------- connection ---------- */
+function attach(){
+  room.on('start',function(m){
+    var d=m.data||{};if(started&&me!=='S'&&!S.over)return;
+    me=d.a===peerId?'A':d.b===peerId?'B':'S';started=true;reset();show('game');
+    if(isHost)setTimeout(function(){room.emit('round',{n:1})},1500);
+  });
+  room.on('round',onRound);
+  room.on('pick',function(m){var d=m.data||{};if(d.n===S.n&&(d.w==='A'||d.w==='B')&&d.w!==me&&VEC[d.d])S.picks[d.w]=d.d});
+  room.on('rematch',function(){
+    started=true;reset();
+    if(isHost)setTimeout(function(){room.emit('round',{n:1})},1500);
+  });
+  room.onPeers(function(c){
+    var ps=c.peers;
+    if(isHost&&!started&&ps.length>=2){
+      var other=ps.filter(function(p){return !p.sameTab})[0];
+      room.emit('start',{a:peerId,b:other.peer});
+    }
+    if(started&&ps.length<2&&!S.over){$('info').textContent='Opponent disconnected'}
+  });
+}
+function connect(code,create){
+  return new Promise(function(res){
+    var ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host);
+    var hs={},ph=[],r={id:null,peers:[]};
+    r.emit=function(t,d){if(ws.readyState===1)ws.send(JSON.stringify({t:'emit',topic:t,data:d}))};
+    r.on=function(t,h){(hs[t]=hs[t]||[]).push(h)};
+    r.onPeers=function(h){ph.push(h)};
+    r.peersList=function(){return r.peers};
+    function mapPeers(list){return list.map(function(p){return {peer:p,sameTab:p===r.id}})}
+    ws.onopen=function(){ws.send(JSON.stringify({t:'join',code:code,create:create}))};
+    ws.onmessage=function(e){
+      var m;try{m=JSON.parse(e.data)}catch(x){return}
+      if(m.t==='joined'){r.id=m.id;r.peers=mapPeers(m.peers);res(r)}
+      else if(m.t==='error'){setErr(m.msg);res(null)}
+      else if(m.t==='msg'){(hs[m.topic]||[]).forEach(function(h){h({data:m.data,peer:m.peer})})}
+      else if(m.t==='peers'){r.peers=mapPeers(m.peers);ph.forEach(function(h){h({peers:r.peers})})}
+    };
+    ws.onclose=function(){if(!r.id)res(null);else $('info').textContent='Connection lost. Reload to play again.'};
+    ws.onerror=function(){if(!r.id){setErr('Could not reach the game server');res(null)}};
+  });
+}
+async function enter(code,host){
+  setErr('');
+  var r=await connect(code,host);
+  if(!r)return false;
+  room=r;isHost=host;peerId=r.id;attach();return true;
+}
+function genCode(){var s='';for(var i=0;i<5;i++)s+=String.fromCharCode(65+Math.floor(Math.random()*26));return s}
+
+$('bCreate').onclick=async function(){
+  for(var i=0;i<5;i++){
+    var code=genCode();
+    if(await enter(code,true)){$('codeOut').textContent=code;show('create');return}
+    if($('err').textContent!=='That code is already in use')break;
+  }
+};
+$('bJoin').onclick=function(){setErr('');show('join');$('codeIn').focus()};
+$('bGo').onclick=async function(){
+  var code=$('codeIn').value.replace(/[^a-z]/gi,'').toUpperCase();
+  if(code.length!==5){$('joinMsg').textContent='Code must be 5 letters';return}
+  $('joinMsg').textContent='Connecting…';
+  if(await enter(code,false)){
+    $('joinMsg').textContent='Joined. Waiting for the host to start…';
+    setTimeout(function(){if(!started)$('joinMsg').textContent='No host found for this code. Check it and try again.'},8000);
+  }else $('joinMsg').textContent=$('err').textContent
+};
+$('bAgain').onclick=function(){room.emit('rematch',{})};
+
+/* ---------- input ---------- */
+document.addEventListener('keydown',function(e){if(KEYS[e.key]){e.preventDefault();choose(KEYS[e.key])}});
+var tx=0,ty=0;
+document.addEventListener('touchstart',function(e){tx=e.touches[0].clientX;ty=e.touches[0].clientY},{passive:true});
+document.addEventListener('touchmove',function(e){if($('game').classList.contains('on'))e.preventDefault()},{passive:false});
+document.addEventListener('touchend',function(e){
+  var t=e.changedTouches[0],dx=t.clientX-tx,dy=t.clientY-ty;
+  if(Math.max(Math.abs(dx),Math.abs(dy))<30)return;
+  choose(Math.abs(dx)>Math.abs(dy)?(dx<0?'L':'R'):(dy<0?'U':'D'));
+},{passive:true});
+
+build();
+})();
+</script>
+</body>
+</html>
